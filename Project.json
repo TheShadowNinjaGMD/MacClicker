@@ -1,0 +1,44 @@
+{
+  "configs": {
+    "Debug": "debug",
+    "Release": "release"
+  },
+  "name": "Project",
+  "options": {
+    "groupSortPosition": "bottom",
+    "transitivelyLinkDependencies": false
+  },
+  "settings": {
+    "CODE_SIGN_IDENTITY": "-"
+  },
+  "targets": {
+    "New Project": {
+      "deploymentTarget": "26.0",
+      "info": {
+        "path": "App\/Info.plist",
+        "properties": {
+          "CFBundleDisplayName": "New Project",
+          "CFBundleShortVersionString": "1.0",
+          "CFBundleVersion": "1",
+          "ITSAppUsesNonExemptEncryption": false
+        }
+      },
+      "platform": "macOS",
+      "settings": {
+        "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
+        "ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME": "AccentColor",
+        "CURRENT_PROJECT_VERSION": "1",
+        "MARKETING_VERSION": "1.0",
+        "PRODUCT_BUNDLE_IDENTIFIER": "app.bitrig.new.112ca00c-909b-4e01-8ce6-94101b0ef1ec",
+        "PRODUCT_NAME": "$(TARGET_NAME)",
+        "SWIFT_VERSION": "5.0"
+      },
+      "sources": [
+        {
+          "path": "App"
+        }
+      ],
+      "type": "application"
+    }
+  }
+}
