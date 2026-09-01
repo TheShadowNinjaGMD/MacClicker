@@ -3,8 +3,14 @@
     {
       "filename" : "Icon.png",
       "idiom" : "universal",
-      "platform" : "macos",
+      "platform" : "ios",
       "size" : "1024x1024"
+    },
+    {
+      "filename" : "Icon.png",
+      "idiom" : "mac",
+      "scale" : "2x",
+      "size" : "512x512"
     }
   ],
   "info" : {

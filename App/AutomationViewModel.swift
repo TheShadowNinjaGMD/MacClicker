@@ -1,0 +1,368 @@
+import AppKit
+import ApplicationServices
+import Foundation
+import Observation
+
+@MainActor
+@Observable
+final class AutomationViewModel {
+  var isClicking = false
+  var clickCount = 0
+  var selectedPresetID: UUID?
+  var presets: [ClickerPreset] = []
+  var availableWindows: [TargetWindow] = []
+
+  var presetName = "Balanced Tap"
+  var targetType: TargetType = .mouse
+  var mouseButton: MouseButton = .left
+  var keyboardInputMode: KeyboardInputMode = .command
+  var keyboardCommand: KeyboardCommand = .space
+  var customKey = "F"
+  var targetWindowID: String? {
+    didSet {
+      guard let targetWindowID else {
+        selectedTargetWindow = nil
+        return
+      }
+
+      selectedTargetWindow = availableWindows.first(where: { $0.id == targetWindowID })
+        ?? (selectedTargetWindow?.id == targetWindowID ? selectedTargetWindow : nil)
+    }
+  }
+  var cps = 12.0
+  var jitterStrength = 0.18
+  var maximumClicks = 0
+  var maximumDurationSeconds = 0.0
+  var stopAtScreenEdge = true
+  var gamingMacroEnabled = false
+  var jitterSamples: [Double] = []
+  var lastSavedAt: Date?
+  var statusMessage = "Ready when you are"
+
+  var accessibilityGranted: Bool {
+    AXIsProcessTrusted()
+  }
+
+  var hotKeyDescription: String {
+    "Control + Option + Space"
+  }
+
+  var selectedTargetWindow: TargetWindow?
+
+  @ObservationIgnored private let engine: ClickerEngine
+  @ObservationIgnored private var globalHotKeyMonitor: Any?
+  @ObservationIgnored private var localHotKeyMonitor: Any?
+  @ObservationIgnored private var windowPollingTimer: Timer?
+  @ObservationIgnored private var engineRunToken = UUID()
+  @ObservationIgnored private var draftID = UUID()
+
+  private let defaults = UserDefaults.standard
+  private let presetsKey = "com.app.macClicker.presets"
+  private let selectedPresetKey = "com.app.macClicker.selectedPreset"
+
+  init() {
+    engine = ClickerEngine()
+    loadPresets()
+    refreshAvailableWindows()
+
+    if let storedPresetID = selectedPresetID,
+       let preset = presets.first(where: { $0.id == storedPresetID }) {
+      apply(preset)
+    } else if let firstPreset = presets.first {
+      selectedPresetID = firstPreset.id
+      draftID = firstPreset.id
+      apply(firstPreset)
+    }
+
+    startWindowTracking()
+  }
+
+  var currentPreset: ClickerPreset {
+    ClickerPreset(
+      id: selectedPresetID ?? draftID,
+      name: normalizedPresetName,
+      targetType: targetType,
+      targetKey: targetKey,
+      targetWindow: selectedTargetWindow,
+      cps: min(max(cps, 1), 500),
+      jitterStrength: min(max(jitterStrength, 0), 1),
+      limits: ClickerLimits(
+        maximumClicks: maximumClicks > 0 ? maximumClicks : nil,
+        maximumDuration: maximumDurationSeconds > 0 ? maximumDurationSeconds : nil,
+        stopAtScreenEdge: stopAtScreenEdge
+      ),
+      jitterSamples: jitterSamples,
+      gamingMacroEnabled: gamingMacroEnabled
+    )
+  }
+
+  func startGlobalHotKey() {
+    guard globalHotKeyMonitor == nil, localHotKeyMonitor == nil else { return }
+
+    localHotKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+      guard Self.isHotKey(event) else { return event }
+      Task { @MainActor [weak self] in
+        self?.toggleClicking()
+      }
+      return nil
+    }
+
+    globalHotKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+      guard Self.isHotKey(event) else { return }
+      Task { @MainActor [weak self] in
+        self?.toggleClicking()
+      }
+    }
+  }
+
+  func toggleClicking() {
+    if isClicking {
+      stopClicking()
+    } else {
+      startClicking()
+    }
+  }
+
+  func startClicking() {
+    guard !isClicking else { return }
+    guard defaults.bool(forKey: "hasCompletedOnboarding") else {
+      statusMessage = "Finish onboarding first"
+      return
+    }
+    guard AXIsProcessTrusted() else {
+      statusMessage = "Accessibility access is required"
+      return
+    }
+
+    let preset = currentPreset
+    let runToken = UUID()
+    engineRunToken = runToken
+    clickCount = 0
+    statusMessage = "Running \(preset.name)"
+    isClicking = true
+
+    engine.start(
+      preset: preset,
+      onClick: { [weak self] count in
+        Task { @MainActor [weak self] in
+          guard let self, self.engineRunToken == runToken else { return }
+          self.clickCount = count
+        }
+      },
+      onStop: { [weak self] in
+        Task { @MainActor [weak self] in
+          guard let self, self.engineRunToken == runToken else { return }
+          self.isClicking = false
+          self.statusMessage = self.clickCount > 0 ? "Stopped safely" : "Ready when you are"
+        }
+      }
+    )
+  }
+
+  func stopClicking() {
+    engineRunToken = UUID()
+    engine.stop()
+    isClicking = false
+    statusMessage = clickCount > 0 ? "Stopped safely" : "Ready when you are"
+  }
+
+  func selectPreset(_ id: UUID) {
+    guard let preset = presets.first(where: { $0.id == id }) else { return }
+    if isClicking { stopClicking() }
+
+    selectedPresetID = id
+    draftID = id
+    apply(preset)
+    defaults.set(id.uuidString, forKey: selectedPresetKey)
+    statusMessage = "Loaded \(preset.name)"
+  }
+
+  func createPreset() {
+    if isClicking { stopClicking() }
+
+    selectedPresetID = nil
+    draftID = UUID()
+    presetName = "Untitled Preset"
+    targetType = .mouse
+    mouseButton = .left
+    keyboardInputMode = .command
+    keyboardCommand = .space
+    customKey = "F"
+    targetWindowID = nil
+    selectedTargetWindow = nil
+    cps = 12
+    jitterStrength = 0.18
+    maximumClicks = 0
+    maximumDurationSeconds = 0
+    stopAtScreenEdge = true
+    gamingMacroEnabled = false
+    jitterSamples = []
+    statusMessage = "New preset ready"
+  }
+
+  func savePreset() {
+    var preset = currentPreset
+    if preset.jitterSamples.isEmpty {
+      preset.jitterSamples = makeJitterProfile()
+      jitterSamples = preset.jitterSamples
+    }
+
+    if let index = presets.firstIndex(where: { $0.id == preset.id }) {
+      presets[index] = preset
+    } else {
+      presets.append(preset)
+    }
+
+    selectedPresetID = preset.id
+    draftID = preset.id
+    persistPresets()
+    defaults.set(preset.id.uuidString, forKey: selectedPresetKey)
+    lastSavedAt = Date()
+    statusMessage = "Saved \(preset.name) locally"
+  }
+
+  func deleteSelectedPreset() {
+    guard let selectedID = selectedPresetID,
+          presets.count > 1,
+          let index = presets.firstIndex(where: { $0.id == selectedID })
+    else {
+      return
+    }
+
+    if isClicking { stopClicking() }
+    presets.remove(at: index)
+    persistPresets()
+
+    let replacement = presets[min(index, presets.count - 1)]
+    selectedPresetID = replacement.id
+    draftID = replacement.id
+    apply(replacement)
+    defaults.set(replacement.id.uuidString, forKey: selectedPresetKey)
+    statusMessage = "Removed preset"
+  }
+
+  func refreshAvailableWindows() {
+    let runningApps = NSWorkspace.shared.runningApplications
+      .filter { !$0.isTerminated && $0.activationPolicy == .regular }
+
+    availableWindows = runningApps.compactMap { application in
+      guard let bundleIdentifier = application.bundleIdentifier,
+            let executablePath = application.executableURL?.path
+      else {
+        return nil
+      }
+
+      return TargetWindow(
+        appName: application.localizedName ?? bundleIdentifier,
+        bundleIdentifier: bundleIdentifier,
+        executablePath: executablePath
+      )
+    }
+    .sorted { $0.appName.localizedCaseInsensitiveCompare($1.appName) == .orderedAscending }
+
+    if let targetWindowID,
+       let runningTarget = availableWindows.first(where: { $0.id == targetWindowID }) {
+      selectedTargetWindow = runningTarget
+    }
+  }
+
+  func showMainWindow() {
+    NSApplication.shared.activate(ignoringOtherApps: true)
+    NSApplication.shared.windows.first(where: { $0.canBecomeKey })?.makeKeyAndOrderFront(nil)
+  }
+
+  func completeOnboarding() {
+    defaults.set(true, forKey: "hasCompletedOnboarding")
+  }
+
+  private var normalizedPresetName: String {
+    let trimmed = presetName.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? "Untitled Preset" : String(trimmed.prefix(60))
+  }
+
+  private var targetKey: TargetKey {
+    switch targetType {
+    case .mouse:
+      return .mouse(mouseButton)
+    case .keyboard:
+      switch keyboardInputMode {
+      case .character:
+        let value = String(customKey.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1))
+        return .character(value.isEmpty ? "F" : value)
+      case .command:
+        return .command(keyboardCommand)
+      }
+    }
+  }
+
+  private func loadPresets() {
+    if let data = defaults.data(forKey: presetsKey),
+       let decoded = try? JSONDecoder().decode([ClickerPreset].self, from: data),
+       !decoded.isEmpty {
+      presets = decoded
+    } else {
+      presets = [.balancedDefault]
+    }
+
+    if let storedID = defaults.string(forKey: selectedPresetKey),
+       let id = UUID(uuidString: storedID),
+       presets.contains(where: { $0.id == id }) {
+      selectedPresetID = id
+    }
+  }
+
+  private func persistPresets() {
+    guard let data = try? JSONEncoder().encode(presets) else { return }
+    defaults.set(data, forKey: presetsKey)
+  }
+
+  private func apply(_ preset: ClickerPreset) {
+    presetName = preset.name
+    targetType = preset.targetType
+    targetWindowID = preset.targetWindow?.id
+    selectedTargetWindow = preset.targetWindow
+    cps = preset.cps
+    jitterStrength = preset.jitterStrength
+    maximumClicks = preset.limits.maximumClicks ?? 0
+    maximumDurationSeconds = preset.limits.maximumDuration ?? 0
+    stopAtScreenEdge = preset.limits.stopAtScreenEdge
+    gamingMacroEnabled = preset.gamingMacroEnabled
+    jitterSamples = preset.jitterSamples
+
+    switch preset.targetKey {
+    case .mouse(let button):
+      mouseButton = button
+      keyboardInputMode = .command
+    case .character(let value):
+      keyboardInputMode = .character
+      customKey = value
+    case .command(let command):
+      keyboardInputMode = .command
+      keyboardCommand = command
+    }
+  }
+
+  private func makeJitterProfile() -> [Double] {
+    (0..<64).map { _ in
+      let first = max(Double.leastNonzeroMagnitude, Double.random(in: 0..<1))
+      let second = Double.random(in: 0..<1)
+      let gaussian = sqrt(-2 * log(first)) * cos(2 * .pi * second)
+      return min(max(gaussian, -2.5), 2.5)
+    }
+  }
+
+  private func startWindowTracking() {
+    windowPollingTimer?.invalidate()
+    windowPollingTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+      Task { @MainActor [weak self] in
+        self?.refreshAvailableWindows()
+      }
+    }
+  }
+
+  private static func isHotKey(_ event: NSEvent) -> Bool {
+    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    return event.keyCode == 49 && modifiers == [.control, .option]
+  }
+
+}
