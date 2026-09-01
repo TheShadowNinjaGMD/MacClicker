@@ -439,8 +439,10 @@ final class AutomationViewModel {
   }
 
   func showMainWindow() {
+    NSApplication.shared.setActivationPolicy(.regular)
     NSApplication.shared.activate(ignoringOtherApps: true)
-    NSApplication.shared.windows.first(where: { $0.canBecomeKey })?.makeKeyAndOrderFront(nil)
+    let window = NSApplication.shared.windows.first(where: { $0.canBecomeKey })
+    window?.makeKeyAndOrderFront(nil)
   }
 
   func completeOnboarding() {

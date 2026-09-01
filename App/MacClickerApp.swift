@@ -67,8 +67,36 @@ struct AppShellView: View {
       } else {
         OnboardingView(model: model)
       }
+
+      MainWindowLifecycleBridge()
+        .frame(width: 1, height: 1)
+        .opacity(0)
+        .allowsHitTesting(false)
     }
     .animation(.easeInOut(duration: 0.3), value: hasCompletedOnboarding)
+  }
+}
+
+struct MainWindowLifecycleBridge: NSViewRepresentable {
+  func makeCoordinator() -> MenuBarWindowDelegate {
+    MenuBarWindowDelegate()
+  }
+
+  func makeNSView(context: Context) -> NSView {
+    NSView()
+  }
+
+  func updateNSView(_ nsView: NSView, context: Context) {
+    guard let window = nsView.window, window.delegate !== context.coordinator else { return }
+    window.delegate = context.coordinator
+  }
+}
+
+final class MenuBarWindowDelegate: NSObject, NSWindowDelegate {
+  func windowShouldClose(_ sender: NSWindow) -> Bool {
+    sender.orderOut(nil)
+    NSApplication.shared.setActivationPolicy(.accessory)
+    return false
   }
 }
 
