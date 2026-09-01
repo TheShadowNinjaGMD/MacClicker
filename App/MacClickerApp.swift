@@ -108,6 +108,10 @@ struct MenuBarStatusMenu: View {
           .font(.headline)
       }
 
+      Label("Shortcut: \(model.hotKeyDescription)", systemImage: "keyboard")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+
       Button(
         model.isClicking ? "Stop clicking" : "Start clicking",
         systemImage: model.isClicking ? "stop.fill" : "play.fill"

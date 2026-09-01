@@ -3,6 +3,119 @@ import ApplicationServices
 import Foundation
 import Observation
 
+struct HotKeyBinding: Codable, Equatable, Sendable {
+  var keyCode: UInt16
+  var keyLabel: String
+  var modifierRawValue: UInt
+
+  var modifierFlags: NSEvent.ModifierFlags {
+    NSEvent.ModifierFlags(rawValue: modifierRawValue)
+  }
+
+  var displayName: String {
+    var pieces: [String] = []
+    let flags = modifierFlags
+
+    if flags.contains(.control) { pieces.append("Control") }
+    if flags.contains(.option) { pieces.append("Option") }
+    if flags.contains(.shift) { pieces.append("Shift") }
+    if flags.contains(.command) { pieces.append("Command") }
+    if flags.contains(.capsLock) { pieces.append("Caps Lock") }
+
+    pieces.append(keyLabel.isEmpty ? "Key \(keyCode)" : keyLabel)
+    return pieces.joined(separator: " + ")
+  }
+
+  static let defaultStartStop = HotKeyBinding(
+    keyCode: 49,
+    keyLabel: "Space",
+    modifierRawValue: NSEvent.ModifierFlags.control.rawValue
+      | NSEvent.ModifierFlags.option.rawValue
+  )
+
+  static let defaultEmergencyStop = HotKeyBinding(
+    keyCode: 53,
+    keyLabel: "Escape",
+    modifierRawValue: NSEvent.ModifierFlags.control.rawValue
+      | NSEvent.ModifierFlags.option.rawValue
+  )
+
+  init(keyCode: UInt16, keyLabel: String, modifierRawValue: UInt) {
+    self.keyCode = keyCode
+    self.keyLabel = keyLabel
+    self.modifierRawValue = modifierRawValue
+  }
+
+  init?(event: NSEvent) {
+    self.init(
+      keyCode: event.keyCode,
+      keyLabel: Self.keyLabel(for: event),
+      modifierRawValue: event.modifierFlags
+        .intersection(.deviceIndependentFlagsMask)
+        .rawValue
+    )
+  }
+
+  func matches(_ event: NSEvent) -> Bool {
+    event.keyCode == keyCode
+      && event.modifierFlags.intersection(.deviceIndependentFlagsMask) == modifierFlags
+  }
+
+  private static func keyLabel(for event: NSEvent) -> String {
+    switch event.keyCode {
+    case 36:
+      return "Enter"
+    case 48:
+      return "Tab"
+    case 49:
+      return "Space"
+    case 51:
+      return "Delete"
+    case 53:
+      return "Escape"
+    case 122:
+      return "F1"
+    case 120:
+      return "F2"
+    case 99:
+      return "F3"
+    case 118:
+      return "F4"
+    case 96:
+      return "F5"
+    case 97:
+      return "F6"
+    case 98:
+      return "F7"
+    case 100:
+      return "F8"
+    case 101:
+      return "F9"
+    case 109:
+      return "F10"
+    case 103:
+      return "F11"
+    case 111:
+      return "F12"
+    default:
+      let characters = event.charactersIgnoringModifiers?.uppercased() ?? ""
+      return characters.isEmpty ? "Key \(event.keyCode)" : characters
+    }
+  }
+}
+
+struct HotKeyPreferences: Codable, Equatable, Sendable {
+  var startStop: HotKeyBinding
+  var emergencyStop: HotKeyBinding
+}
+
+enum HotKeyTarget: String, Equatable, Identifiable, Sendable {
+  case startStop
+  case emergencyStop
+
+  var id: String { rawValue }
+}
+
 @MainActor
 @Observable
 final class AutomationViewModel {
@@ -11,6 +124,9 @@ final class AutomationViewModel {
   var selectedPresetID: UUID?
   var presets: [ClickerPreset] = []
   var availableWindows: [TargetWindow] = []
+  var startStopHotKey = HotKeyBinding.defaultStartStop
+  var emergencyStopHotKey = HotKeyBinding.defaultEmergencyStop
+  var recordingTarget: HotKeyTarget?
 
   var presetName = "Balanced Tap"
   var targetType: TargetType = .mouse
@@ -44,7 +160,11 @@ final class AutomationViewModel {
   }
 
   var hotKeyDescription: String {
-    "Control + Option + Space"
+    startStopHotKey.displayName
+  }
+
+  var emergencyHotKeyDescription: String {
+    emergencyStopHotKey.displayName
   }
 
   var selectedTargetWindow: TargetWindow?
@@ -52,6 +172,7 @@ final class AutomationViewModel {
   @ObservationIgnored private let engine: ClickerEngine
   @ObservationIgnored private var globalHotKeyMonitor: Any?
   @ObservationIgnored private var localHotKeyMonitor: Any?
+  @ObservationIgnored private var shortcutCaptureMonitor: Any?
   @ObservationIgnored private var windowPollingTimer: Timer?
   @ObservationIgnored private var engineRunToken = UUID()
   @ObservationIgnored private var draftID = UUID()
@@ -59,9 +180,11 @@ final class AutomationViewModel {
   private let defaults = UserDefaults.standard
   private let presetsKey = "com.app.macClicker.presets"
   private let selectedPresetKey = "com.app.macClicker.selectedPreset"
+  private let hotKeysKey = "com.app.macClicker.hotKeys"
 
   init() {
     engine = ClickerEngine()
+    loadHotKeys()
     loadPresets()
     refreshAvailableWindows()
 
@@ -99,20 +222,69 @@ final class AutomationViewModel {
   func startGlobalHotKey() {
     guard globalHotKeyMonitor == nil, localHotKeyMonitor == nil else { return }
 
+    let startStopHotKey = startStopHotKey
+    let emergencyStopHotKey = emergencyStopHotKey
+
     localHotKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-      guard Self.isHotKey(event) else { return event }
-      Task { @MainActor [weak self] in
-        self?.toggleClicking()
+      if startStopHotKey.matches(event) {
+        Task { @MainActor [weak self] in
+          self?.toggleClicking()
+        }
+        return nil
       }
-      return nil
+
+      if emergencyStopHotKey.matches(event) {
+        Task { @MainActor [weak self] in
+          self?.stopClicking()
+        }
+        return nil
+      }
+
+      return event
     }
 
     globalHotKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-      guard Self.isHotKey(event) else { return }
-      Task { @MainActor [weak self] in
-        self?.toggleClicking()
+      if startStopHotKey.matches(event) {
+        Task { @MainActor [weak self] in
+          self?.toggleClicking()
+        }
+      } else if emergencyStopHotKey.matches(event) {
+        Task { @MainActor [weak self] in
+          self?.stopClicking()
+        }
       }
     }
+  }
+
+  func beginRecording(_ target: HotKeyTarget) {
+    stopGlobalHotKey()
+    removeShortcutCaptureMonitor()
+    recordingTarget = target
+
+    shortcutCaptureMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+      guard let binding = HotKeyBinding(event: event) else { return event }
+
+      Task { @MainActor [weak self] in
+        self?.finishRecording(binding)
+      }
+      return nil
+    }
+  }
+
+  func cancelRecording() {
+    removeShortcutCaptureMonitor()
+    recordingTarget = nil
+    startGlobalHotKey()
+  }
+
+  func restoreDefaultHotKeys() {
+    cancelRecording()
+    startStopHotKey = .defaultStartStop
+    emergencyStopHotKey = .defaultEmergencyStop
+    persistHotKeys()
+    stopGlobalHotKey()
+    startGlobalHotKey()
+    statusMessage = "Restored default shortcuts"
   }
 
   func toggleClicking() {
@@ -311,6 +483,71 @@ final class AutomationViewModel {
     }
   }
 
+  private func loadHotKeys() {
+    guard let data = defaults.data(forKey: hotKeysKey),
+          let preferences = try? JSONDecoder().decode(HotKeyPreferences.self, from: data)
+    else {
+      return
+    }
+
+    startStopHotKey = preferences.startStop
+    emergencyStopHotKey = preferences.emergencyStop
+  }
+
+  private func persistHotKeys() {
+    let preferences = HotKeyPreferences(
+      startStop: startStopHotKey,
+      emergencyStop: emergencyStopHotKey
+    )
+    guard let data = try? JSONEncoder().encode(preferences) else { return }
+    defaults.set(data, forKey: hotKeysKey)
+  }
+
+  private func finishRecording(_ binding: HotKeyBinding) {
+    guard let target = recordingTarget else { return }
+    removeShortcutCaptureMonitor()
+    recordingTarget = nil
+
+    if target == .startStop {
+      guard binding != emergencyStopHotKey else {
+        statusMessage = "Choose a different shortcut for Start / Stop"
+        startGlobalHotKey()
+        return
+      }
+      startStopHotKey = binding
+      statusMessage = "Updated Start / Stop shortcut"
+    } else {
+      guard binding != startStopHotKey else {
+        statusMessage = "Choose a different shortcut for Emergency Stop"
+        startGlobalHotKey()
+        return
+      }
+      emergencyStopHotKey = binding
+      statusMessage = "Updated Emergency Stop shortcut"
+    }
+
+    persistHotKeys()
+    startGlobalHotKey()
+  }
+
+  private func stopGlobalHotKey() {
+    if let globalHotKeyMonitor {
+      NSEvent.removeMonitor(globalHotKeyMonitor)
+      self.globalHotKeyMonitor = nil
+    }
+    if let localHotKeyMonitor {
+      NSEvent.removeMonitor(localHotKeyMonitor)
+      self.localHotKeyMonitor = nil
+    }
+  }
+
+  private func removeShortcutCaptureMonitor() {
+    if let shortcutCaptureMonitor {
+      NSEvent.removeMonitor(shortcutCaptureMonitor)
+      self.shortcutCaptureMonitor = nil
+    }
+  }
+
   private func persistPresets() {
     guard let data = try? JSONEncoder().encode(presets) else { return }
     defaults.set(data, forKey: presetsKey)
@@ -358,11 +595,6 @@ final class AutomationViewModel {
         self?.refreshAvailableWindows()
       }
     }
-  }
-
-  private static func isHotKey(_ event: NSEvent) -> Bool {
-    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-    return event.keyCode == 49 && modifiers == [.control, .option]
   }
 
 }

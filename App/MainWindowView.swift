@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MainWindowView: View {
   @Bindable var model: AutomationViewModel
+  @State private var isShowingSettings = false
 
   var body: some View {
     HStack(spacing: 0) {
@@ -15,7 +16,8 @@ struct MainWindowView: View {
           WorkspaceHeader(
             presetName: model.presetName,
             statusMessage: model.statusMessage,
-            hotKeyDescription: model.hotKeyDescription
+            hotKeyDescription: model.hotKeyDescription,
+            onSettings: { isShowingSettings = true }
           )
 
           ActivationCard(
@@ -52,6 +54,9 @@ struct MainWindowView: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .sheet(isPresented: $isShowingSettings) {
+      SettingsView(model: model)
+    }
   }
 }
 
@@ -209,6 +214,7 @@ struct WorkspaceHeader: View {
   let presetName: String
   let statusMessage: String
   let hotKeyDescription: String
+  let onSettings: () -> Void
 
   var body: some View {
     HStack(alignment: .bottom) {
@@ -226,16 +232,26 @@ struct WorkspaceHeader: View {
 
       Spacer()
 
-      Label(hotKeyDescription, systemImage: "command")
-        .font(.caption.weight(.medium))
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 11)
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay {
-          Capsule()
-            .strokeBorder(Color.primary.opacity(0.1), lineWidth: 1)
+      HStack(spacing: 9) {
+        Label(hotKeyDescription, systemImage: "keyboard")
+          .font(.caption.weight(.medium))
+          .foregroundStyle(.secondary)
+          .padding(.horizontal, 11)
+          .padding(.vertical, 8)
+          .background(.ultraThinMaterial, in: Capsule())
+          .overlay {
+            Capsule()
+              .strokeBorder(Color.primary.opacity(0.1), lineWidth: 1)
+          }
+
+        Button("Settings", systemImage: "gearshape") {
+          onSettings()
         }
+        .labelStyle(.iconOnly)
+        .buttonStyle(.borderless)
+        .font(.title3)
+        .help("Open settings")
+      }
     }
   }
 }
@@ -715,5 +731,184 @@ struct OptionBanner: View {
       .labelStyle(.titleAndIcon)
       .symbolRenderingMode(.palette)
       .foregroundStyle(colors[0], colors[1])
+  }
+}
+
+struct SettingsView: View {
+  @Bindable var model: AutomationViewModel
+  @Environment(\.dismiss) private var dismiss
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      HStack(spacing: 12) {
+        Image(systemName: "gearshape.2.fill")
+          .font(.title2.weight(.semibold))
+          .foregroundStyle(Color.indigo, Color.purple)
+          .symbolRenderingMode(.palette)
+          .frame(width: 38, height: 38)
+          .background(Color.indigo.opacity(0.13), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+
+        VStack(alignment: .leading, spacing: 3) {
+          Text("Settings")
+            .font(.title2.weight(.bold))
+          Text("Tune how MacClicker responds to your keyboard.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+
+        Spacer()
+      }
+
+      ScrollView {
+        VStack(alignment: .leading, spacing: 18) {
+          GlassPanel {
+            VStack(alignment: .leading, spacing: 0) {
+              PanelHeader(
+                title: "Keyboard shortcuts",
+                subtitle: "Record a combination to replace the active shortcut.",
+                systemImage: "keyboard.badge.ellipsis",
+                colors: [.blue, .cyan]
+              )
+
+              SettingsShortcutRow(
+                title: "Start / Stop",
+                detail: "Toggle the selected automation preset.",
+                binding: model.startStopHotKey,
+                isRecording: model.recordingTarget == .startStop,
+                onRecord: { model.beginRecording(.startStop) },
+                onCancel: model.cancelRecording
+              )
+              .padding(.top, 18)
+
+              SettingsShortcutRow(
+                title: "Emergency Stop",
+                detail: "Immediately stop the current run.",
+                binding: model.emergencyStopHotKey,
+                isRecording: model.recordingTarget == .emergencyStop,
+                onRecord: { model.beginRecording(.emergencyStop) },
+                onCancel: model.cancelRecording
+              )
+              .padding(.top, 14)
+
+              Label(
+                "Use a modifier for a shortcut that will not interfere with normal typing.",
+                systemImage: "info.circle"
+              )
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .padding(.top, 16)
+            }
+          }
+
+          GlassPanel {
+            HStack(spacing: 12) {
+              Image(systemName: "arrow.triangle.2.circlepath")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(Color.orange, Color.yellow)
+                .symbolRenderingMode(.palette)
+                .frame(width: 32, height: 32)
+                .background(Color.orange.opacity(0.13), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+
+              VStack(alignment: .leading, spacing: 3) {
+                Text("Reset shortcuts")
+                  .font(.subheadline.weight(.semibold))
+                Text("Restore Control + Option + Space and Control + Option + Escape.")
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              }
+
+              Spacer()
+
+              Button("Restore defaults", systemImage: "arrow.counterclockwise") {
+                model.restoreDefaultHotKeys()
+              }
+              .buttonStyle(.bordered)
+            }
+          }
+        }
+        .padding(.vertical, 24)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+      HStack {
+        Spacer()
+        Button("Done") {
+          dismiss()
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .keyboardShortcut(.defaultAction)
+      }
+    }
+    .padding(28)
+    .frame(width: 650, height: 565)
+    .background {
+      VisualEffectBlur(
+        material: .hudWindow,
+        blendingMode: .behindWindow,
+        state: .active,
+        isEmphasized: true
+      )
+    }
+    .onDisappear {
+      if model.recordingTarget != nil {
+        model.cancelRecording()
+      }
+    }
+  }
+}
+
+struct SettingsShortcutRow: View {
+  let title: String
+  let detail: String
+  let binding: HotKeyBinding
+  let isRecording: Bool
+  let onRecord: () -> Void
+  let onCancel: () -> Void
+
+  var body: some View {
+    HStack(spacing: 12) {
+      VStack(alignment: .leading, spacing: 3) {
+        Text(title)
+          .font(.subheadline.weight(.semibold))
+        Text(detail)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+
+      Spacer(minLength: 12)
+
+      Button {
+        if isRecording {
+          onCancel()
+        } else {
+          onRecord()
+        }
+      } label: {
+        HStack(spacing: 8) {
+          Image(systemName: isRecording ? "keyboard" : "pencil")
+          Text(isRecording ? "Press keys…" : binding.displayName)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+        }
+        .font(.caption.weight(.semibold))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(
+          isRecording ? Color.accentColor.opacity(0.17) : Color.primary.opacity(0.06),
+          in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
+        .overlay {
+          RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(
+              isRecording ? Color.accentColor.opacity(0.45) : Color.primary.opacity(0.1),
+              lineWidth: 1
+            )
+        }
+      }
+      .buttonStyle(.plain)
+      .help(isRecording ? "Press a key combination to record it" : "Record a new shortcut")
+    }
+    .animation(.spring(response: 0.35, dampingFraction: 0.75), value: isRecording)
   }
 }
