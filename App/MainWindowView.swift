@@ -441,7 +441,7 @@ struct TargetControlSection: View {
 
         HStack(spacing: 12) {
           OptionBanner(
-            title: model.keyboardInputMode == .character ? "Which key to press" : "Command key",
+            title: model.keyboardInputMode == .character ? "Which key to press" : "System key",
             systemImage: "keyboard.fill",
             colors: [.indigo, .purple]
           )
@@ -465,6 +465,39 @@ struct TargetControlSection: View {
           }
         }
         .padding(.top, 14)
+
+        HStack(spacing: 12) {
+          Text("Modifier keys")
+            .font(.subheadline.weight(.medium))
+
+          Spacer()
+
+          Menu {
+            ForEach(KeyboardModifier.allCases) { modifier in
+              Toggle(
+                modifier.title,
+                isOn: Binding(
+                  get: { model.keyboardModifiers.contains(modifier) },
+                  set: { model.setKeyboardModifier(modifier, isEnabled: $0) }
+                )
+              )
+            }
+          } label: {
+            Text(model.keyboardModifierDescription)
+              .font(.subheadline.weight(.medium))
+              .lineLimit(1)
+              .padding(.horizontal, 12)
+              .padding(.vertical, 8)
+              .background(
+                Color.primary.opacity(0.06),
+                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+              )
+              .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+          }
+          .menuStyle(.borderlessButton)
+          .help("Choose modifier keys to send with the selected key.")
+        }
+        .padding(.top, 13)
       }
 
       Toggle(isOn: $model.gamingMacroEnabled) {
@@ -516,6 +549,35 @@ struct RateControlSection: View {
 
       VStack(alignment: .leading, spacing: 7) {
         HStack {
+          Text("Press duration")
+            .font(.subheadline.weight(.medium))
+          Spacer()
+          Text(pressDurationLabel)
+            .font(.subheadline.weight(.bold).monospacedDigit())
+            .foregroundStyle(.tint)
+        }
+
+        Slider(
+          value: $model.pressDuration,
+          in: ClickerPreset.minimumPressDuration...ClickerPreset.maximumPressDuration
+        ) {
+          Text("Press duration")
+        } minimumValueLabel: {
+          Text("1 ms")
+        } maximumValueLabel: {
+          Text("1 s")
+        }
+        .help("Longer presses reduce the maximum achievable click rate.")
+        .tint(.orange)
+
+        Text("How long each click or key press stays down.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      .padding(.top, 16)
+
+      VStack(alignment: .leading, spacing: 7) {
+        HStack {
           Text("Gaussian jitter")
             .font(.subheadline.weight(.medium))
           Spacer()
@@ -536,6 +598,14 @@ struct RateControlSection: View {
       .padding(.top, 16)
     }
     .frame(maxWidth: .infinity)
+  }
+
+  private var pressDurationLabel: String {
+    if model.pressDuration >= 1 {
+      return "1 s"
+    }
+
+    return "\(Int((model.pressDuration * 1_000).rounded())) ms"
   }
 }
 
