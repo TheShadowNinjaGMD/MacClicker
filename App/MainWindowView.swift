@@ -1,4 +1,6 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct MainWindowView: View {
   @Bindable var model: AutomationViewModel
@@ -65,7 +67,7 @@ struct WorkspaceSidebar: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      SidebarBrand()
+      SidebarBrand(customAppIconImage: model.customAppIconImage)
 
       HStack {
         Text("PRESETS")
@@ -89,7 +91,13 @@ struct WorkspaceSidebar: View {
             PresetListRow(
               preset: preset,
               isSelected: preset.id == model.selectedPresetID,
-              onSelect: { model.selectPreset(preset.id) }
+              isRenaming: preset.id == model.presetBeingRenamedID,
+              canDelete: model.presets.count > 1,
+              onSelect: { model.selectPreset(preset.id) },
+              onRename: { model.beginRenamingPreset(preset.id) },
+              onCommitRename: { model.renamePreset(preset.id, to: $0) },
+              onCancelRename: model.cancelRenamingPreset,
+              onDelete: { model.deletePreset(preset.id) }
             )
           }
         }
@@ -116,14 +124,25 @@ struct WorkspaceSidebar: View {
 }
 
 struct SidebarBrand: View {
+  let customAppIconImage: NSImage?
+
   var body: some View {
     HStack(spacing: 11) {
-      Image(systemName: "cursorarrow.click.2")
-        .font(.title3.weight(.semibold))
-        .foregroundStyle(Color.mint, Color.teal)
-        .symbolRenderingMode(.palette)
-        .frame(width: 30, height: 30)
-        .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 9))
+      Group {
+        if let customAppIconImage {
+          Image(nsImage: customAppIconImage)
+            .resizable()
+            .scaledToFit()
+            .padding(3)
+        } else {
+          Image(systemName: "cursorarrow.click.2")
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(Color.mint, Color.teal)
+            .symbolRenderingMode(.palette)
+        }
+      }
+      .frame(width: 30, height: 30)
+      .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 9))
 
       VStack(alignment: .leading, spacing: 2) {
         Text("MacClicker")
@@ -141,48 +160,119 @@ struct SidebarBrand: View {
 struct PresetListRow: View {
   let preset: ClickerPreset
   let isSelected: Bool
+  let isRenaming: Bool
+  let canDelete: Bool
   let onSelect: () -> Void
+  let onRename: () -> Void
+  let onCommitRename: (String) -> Bool
+  let onCancelRename: () -> Void
+  let onDelete: () -> Void
+
+  @State private var draftName = ""
+  @FocusState private var nameFieldIsFocused: Bool
 
   var body: some View {
-    Button(action: onSelect) {
-      HStack(spacing: 11) {
-        Image(systemName: preset.targetType.systemImage)
-          .font(.subheadline.weight(.semibold))
-          .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-          .frame(width: 28, height: 28)
-          .background(
-            isSelected ? Color.accentColor.opacity(0.15) : Color.primary.opacity(0.06),
-            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-          )
+    HStack(spacing: 4) {
+      if isRenaming {
+        HStack(spacing: 11) {
+          presetIcon
 
-        VStack(alignment: .leading, spacing: 3) {
-          Text(preset.name)
-            .font(.subheadline.weight(.semibold))
-            .lineLimit(1)
-          Text("\(preset.cps, specifier: "%.0f") CPS · \(preset.targetKey.displayName)")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-        }
+          VStack(alignment: .leading, spacing: 3) {
+            TextField("Preset name", text: $draftName)
+              .textFieldStyle(.plain)
+              .font(.subheadline.weight(.semibold))
+              .focused($nameFieldIsFocused)
+              .onSubmit(commitRename)
+              .onExitCommand(perform: onCancelRename)
+              .accessibilityLabel("Preset name")
 
-        Spacer(minLength: 4)
-      }
-      .padding(.horizontal, 10)
-      .padding(.vertical, 9)
-      .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-      .background(
-        isSelected ? Color.accentColor.opacity(0.12) : Color.clear,
-        in: RoundedRectangle(cornerRadius: 11, style: .continuous)
-      )
-      .overlay {
-        if isSelected {
-          RoundedRectangle(cornerRadius: 11, style: .continuous)
-            .strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 1)
+            presetSubtitle
+          }
+
+          Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+
+        Button("Save preset name", systemImage: "checkmark", action: commitRename)
+          .labelStyle(.iconOnly)
+          .buttonStyle(.borderless)
+          .help("Save preset name")
+          .disabled(draftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      } else {
+        Button(action: onSelect) {
+          HStack(spacing: 11) {
+            presetIcon
+
+            VStack(alignment: .leading, spacing: 3) {
+              Text(preset.name)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+              presetSubtitle
+            }
+
+            Spacer(minLength: 0)
+          }
+          .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+
+        Button("Rename preset", systemImage: "pencil", action: onRename)
+          .labelStyle(.iconOnly)
+          .buttonStyle(.borderless)
+          .help("Rename \(preset.name)")
       }
     }
-    .buttonStyle(.plain)
+    .padding(.horizontal, 10)
+    .padding(.vertical, 9)
+    .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+    .background(
+      isSelected ? Color.accentColor.opacity(0.12) : Color.clear,
+      in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+    )
+    .overlay {
+      if isSelected {
+        RoundedRectangle(cornerRadius: 11, style: .continuous)
+          .strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 1)
+      }
+    }
+    .contextMenu {
+      Button("Rename", systemImage: "pencil", action: onRename)
+      Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
+        .disabled(!canDelete)
+    }
+    .onChange(of: isRenaming, initial: true) { _, isRenaming in
+      guard isRenaming else { return }
+      draftName = preset.name
+      DispatchQueue.main.async {
+        nameFieldIsFocused = true
+      }
+    }
     .animation(.spring(response: 0.35, dampingFraction: 0.75), value: isSelected)
+    .animation(.snappy, value: isRenaming)
+  }
+
+  private var presetIcon: some View {
+    Image(systemName: preset.targetType.systemImage)
+      .font(.subheadline.weight(.semibold))
+      .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+      .frame(width: 28, height: 28)
+      .background(
+        isSelected ? Color.accentColor.opacity(0.15) : Color.primary.opacity(0.06),
+        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+      )
+  }
+
+  private var presetSubtitle: some View {
+    Text("\(preset.cps, specifier: "%.0f") CPS · \(preset.targetKey.displayName)")
+      .font(.caption)
+      .foregroundStyle(.secondary)
+      .lineLimit(1)
+  }
+
+  private func commitRename() {
+    guard onCommitRename(draftName) else { return }
+    nameFieldIsFocused = false
   }
 }
 
@@ -807,6 +897,9 @@ struct OptionBanner: View {
 struct SettingsView: View {
   @Bindable var model: AutomationViewModel
   @Environment(\.dismiss) private var dismiss
+  @State private var isImportingCustomIcon = false
+  @State private var isShowingIconImportError = false
+  @State private var iconImportError = "Choose a valid image file."
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -831,6 +924,57 @@ struct SettingsView: View {
 
       ScrollView {
         VStack(alignment: .leading, spacing: 18) {
+          GlassPanel {
+            HStack(spacing: 14) {
+              Group {
+                if let customAppIconImage = model.customAppIconImage {
+                  Image(nsImage: customAppIconImage)
+                    .resizable()
+                    .scaledToFit()
+                    .padding(4)
+                } else {
+                  Image(systemName: "cursorarrow.click.2")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(Color.mint, Color.teal)
+                    .symbolRenderingMode(.palette)
+                }
+              }
+              .frame(width: 48, height: 48)
+              .background(
+                Color.accentColor.opacity(0.12),
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+              )
+
+              VStack(alignment: .leading, spacing: 3) {
+                Text("Add a custom icon for this app")
+                  .font(.subheadline.weight(.semibold))
+                Text("Use an image for the Dock and MacClicker interface. System Settings may still show the installed app’s icon.")
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+                  .fixedSize(horizontal: false, vertical: true)
+              }
+
+              Spacer(minLength: 10)
+
+              Button(
+                model.customAppIconData == nil ? "Choose Icon…" : "Change Icon…",
+                systemImage: "photo"
+              ) {
+                isImportingCustomIcon = true
+              }
+              .buttonStyle(.bordered)
+
+              if model.customAppIconData != nil {
+                Button("Restore default icon", systemImage: "arrow.counterclockwise") {
+                  model.setCustomAppIconData(nil)
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .help("Restore default icon")
+              }
+            }
+          }
+
           GlassPanel {
             VStack(alignment: .leading, spacing: 0) {
               PanelHeader(
@@ -920,11 +1064,63 @@ struct SettingsView: View {
         isEmphasized: true
       )
     }
+    .fileImporter(
+      isPresented: $isImportingCustomIcon,
+      allowedContentTypes: [.image],
+      allowsMultipleSelection: false
+    ) { result in
+      switch result {
+      case .success(let urls):
+        guard let url = urls.first else { return }
+        importCustomIcon(from: url)
+      case .failure(let error):
+        guard (error as NSError).code != NSUserCancelledError else { return }
+        iconImportError = error.localizedDescription
+        isShowingIconImportError = true
+      }
+    }
+    .alert("Couldn’t add custom icon", isPresented: $isShowingIconImportError) {
+      Button("OK", role: .cancel) {}
+    } message: {
+      Text(iconImportError)
+    }
     .onDisappear {
       if model.recordingTarget != nil {
         model.cancelRecording()
       }
     }
+  }
+
+  private func importCustomIcon(from url: URL) {
+    let didStartAccessing = url.startAccessingSecurityScopedResource()
+    defer {
+      if didStartAccessing {
+        url.stopAccessingSecurityScopedResource()
+      }
+    }
+
+    do {
+      let sourceData = try Data(contentsOf: url)
+      guard let image = NSImage(data: sourceData),
+            let tiffData = image.tiffRepresentation,
+            let bitmap = NSBitmapImageRep(data: tiffData),
+            let pngData = bitmap.representation(using: .png, properties: [:])
+      else {
+        throw CustomAppIconImportError.invalidImage
+      }
+      model.setCustomAppIconData(pngData)
+    } catch {
+      iconImportError = error.localizedDescription
+      isShowingIconImportError = true
+    }
+  }
+}
+
+private enum CustomAppIconImportError: LocalizedError {
+  case invalidImage
+
+  var errorDescription: String? {
+    "The selected file couldn’t be read as an image. Choose a PNG, JPEG, or other supported image file."
   }
 }
 

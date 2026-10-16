@@ -226,6 +226,8 @@ struct PermissionGuardStepView: View {
   let onContinue: () -> Void
 
   @State private var isTrusted = AXIsProcessTrusted()
+  @State private var hasAdvanced = false
+  @State private var helperPanelController = AccessibilityOnboardingPanelController()
   private let permissionTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
   var body: some View {
@@ -252,40 +254,52 @@ struct PermissionGuardStepView: View {
         .padding(.top, 26)
 
       Button("Open Accessibility Settings", systemImage: "arrow.up.forward.app") {
-        NSWorkspace.shared.open(
-          URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
+        helperPanelController.present(
+          applicationURL: Bundle.main.bundleURL,
+          icon: NSApplication.shared.applicationIconImage
+            ?? NSWorkspace.shared.icon(forFile: Bundle.main.bundleURL.path)
         )
+        if let settingsURL = URL(
+          string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        ) {
+          NSWorkspace.shared.open(settingsURL)
+        }
       }
       .buttonStyle(.bordered)
       .controlSize(.large)
       .padding(.top, 22)
 
-      Text("After enabling MacClicker, return here. The guard checks your access every second.")
+      Text(
+        isTrusted
+          ? "Access is ready. MacClicker will continue automatically."
+          : "Drag the MacClicker icon into the Accessibility list in System Settings. MacClicker continues as soon as access is granted."
+      )
         .font(.caption)
         .foregroundStyle(.secondary)
         .multilineTextAlignment(.center)
+        .frame(maxWidth: 500)
         .padding(.top, 12)
 
       Spacer()
-
-      HStack {
-        Spacer()
-        Button("Next", systemImage: "arrow.right") {
-          onContinue()
-        }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-        .disabled(!isTrusted)
-        .keyboardShortcut(.defaultAction)
-      }
-      .padding(.bottom, 34)
     }
+    .onAppear(perform: refreshAccessibility)
     .onReceive(permissionTimer) { _ in
-      let trusted = AXIsProcessTrusted()
-      guard trusted != isTrusted else { return }
+      refreshAccessibility()
+    }
+  }
+
+  private func refreshAccessibility() {
+    let trusted = AXIsProcessTrusted()
+    if trusted != isTrusted {
       withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
         isTrusted = trusted
       }
+    }
+
+    guard trusted, !hasAdvanced else { return }
+    hasAdvanced = true
+    helperPanelController.dismiss {
+      onContinue()
     }
   }
 }
