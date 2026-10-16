@@ -133,6 +133,7 @@ final class AutomationViewModel {
   var mouseButton: MouseButton = .left
   var keyboardInputMode: KeyboardInputMode = .command
   var keyboardCommand: KeyboardCommand = .space
+  var keyboardModifiers: Set<KeyboardModifier> = []
   var customKey = "F"
   var targetWindowID: String? {
     didSet {
@@ -147,6 +148,7 @@ final class AutomationViewModel {
   }
   var cps = 12.0
   var jitterStrength = 0.18
+  var pressDuration = ClickerPreset.defaultPressDuration
   var maximumClicks = 0
   var maximumDurationSeconds = 0.0
   var stopAtScreenEdge = true
@@ -165,6 +167,13 @@ final class AutomationViewModel {
 
   var emergencyHotKeyDescription: String {
     emergencyStopHotKey.displayName
+  }
+
+  var keyboardModifierDescription: String {
+    let selectedModifiers = KeyboardModifier.allCases
+      .filter(keyboardModifiers.contains)
+      .map(\.title)
+    return selectedModifiers.isEmpty ? "None" : selectedModifiers.joined(separator: " + ")
   }
 
   var selectedTargetWindow: TargetWindow?
@@ -215,7 +224,11 @@ final class AutomationViewModel {
         stopAtScreenEdge: stopAtScreenEdge
       ),
       jitterSamples: jitterSamples,
-      gamingMacroEnabled: gamingMacroEnabled
+      gamingMacroEnabled: gamingMacroEnabled,
+      pressDuration: min(
+        max(pressDuration, ClickerPreset.minimumPressDuration),
+        ClickerPreset.maximumPressDuration
+      )
     )
   }
 
@@ -295,6 +308,14 @@ final class AutomationViewModel {
     }
   }
 
+  func setKeyboardModifier(_ modifier: KeyboardModifier, isEnabled: Bool) {
+    if isEnabled {
+      keyboardModifiers.insert(modifier)
+    } else {
+      keyboardModifiers.remove(modifier)
+    }
+  }
+
   func startClicking() {
     guard !isClicking else { return }
     guard defaults.bool(forKey: "hasCompletedOnboarding") else {
@@ -359,11 +380,13 @@ final class AutomationViewModel {
     mouseButton = .left
     keyboardInputMode = .command
     keyboardCommand = .space
+    keyboardModifiers = []
     customKey = "F"
     targetWindowID = nil
     selectedTargetWindow = nil
     cps = 12
     jitterStrength = 0.18
+    pressDuration = ClickerPreset.defaultPressDuration
     maximumClicks = 0
     maximumDurationSeconds = 0
     stopAtScreenEdge = true
@@ -462,9 +485,16 @@ final class AutomationViewModel {
       switch keyboardInputMode {
       case .character:
         let value = String(customKey.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1))
-        return .character(value.isEmpty ? "F" : value)
+        let key = AutomationKey.character(value.isEmpty ? "F" : value)
+        return keyboardModifiers.isEmpty
+          ? .character(value.isEmpty ? "F" : value)
+          : .combination(KeyboardChord(key: key, modifiers: Array(keyboardModifiers)))
       case .command:
-        return .command(keyboardCommand)
+        return keyboardModifiers.isEmpty
+          ? .command(keyboardCommand)
+          : .combination(
+            KeyboardChord(key: .system(keyboardCommand), modifiers: Array(keyboardModifiers))
+          )
       }
     }
   }
@@ -562,6 +592,7 @@ final class AutomationViewModel {
     selectedTargetWindow = preset.targetWindow
     cps = preset.cps
     jitterStrength = preset.jitterStrength
+    pressDuration = preset.pressDuration
     maximumClicks = preset.limits.maximumClicks ?? 0
     maximumDurationSeconds = preset.limits.maximumDuration ?? 0
     stopAtScreenEdge = preset.limits.stopAtScreenEdge
@@ -572,12 +603,25 @@ final class AutomationViewModel {
     case .mouse(let button):
       mouseButton = button
       keyboardInputMode = .command
+      keyboardModifiers = []
     case .character(let value):
       keyboardInputMode = .character
       customKey = value
+      keyboardModifiers = []
     case .command(let command):
       keyboardInputMode = .command
       keyboardCommand = command
+      keyboardModifiers = []
+    case .combination(let chord):
+      keyboardModifiers = Set(chord.modifiers)
+      switch chord.key {
+      case .character(let value):
+        keyboardInputMode = .character
+        customKey = value
+      case .system(let command):
+        keyboardInputMode = .command
+        keyboardCommand = command
+      }
     }
   }
 
