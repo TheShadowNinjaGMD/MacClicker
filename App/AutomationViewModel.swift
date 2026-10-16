@@ -123,7 +123,9 @@ final class AutomationViewModel {
   var clickCount = 0
   var selectedPresetID: UUID?
   var presets: [ClickerPreset] = []
+  var presetBeingRenamedID: UUID?
   var availableWindows: [TargetWindow] = []
+  var customAppIconData: Data?
   var startStopHotKey = HotKeyBinding.defaultStartStop
   var emergencyStopHotKey = HotKeyBinding.defaultEmergencyStop
   var recordingTarget: HotKeyTarget?
@@ -178,6 +180,11 @@ final class AutomationViewModel {
 
   var selectedTargetWindow: TargetWindow?
 
+  var customAppIconImage: NSImage? {
+    guard let customAppIconData else { return nil }
+    return NSImage(data: customAppIconData)
+  }
+
   @ObservationIgnored private let engine: ClickerEngine
   @ObservationIgnored private var globalHotKeyMonitor: Any?
   @ObservationIgnored private var localHotKeyMonitor: Any?
@@ -190,9 +197,12 @@ final class AutomationViewModel {
   private let presetsKey = "com.app.macClicker.presets"
   private let selectedPresetKey = "com.app.macClicker.selectedPreset"
   private let hotKeysKey = "com.app.macClicker.hotKeys"
+  private let customAppIconKey = "com.app.macClicker.customAppIcon"
 
   init() {
     engine = ClickerEngine()
+    customAppIconData = defaults.data(forKey: customAppIconKey)
+    applyCustomAppIcon()
     loadHotKeys()
     loadPresets()
     refreshAvailableWindows()
@@ -363,6 +373,7 @@ final class AutomationViewModel {
     guard let preset = presets.first(where: { $0.id == id }) else { return }
     if isClicking { stopClicking() }
 
+    presetBeingRenamedID = nil
     selectedPresetID = id
     draftID = id
     apply(preset)
@@ -373,9 +384,10 @@ final class AutomationViewModel {
   func createPreset() {
     if isClicking { stopClicking() }
 
+    presetBeingRenamedID = nil
     selectedPresetID = nil
     draftID = UUID()
-    presetName = "Untitled Preset"
+    presetName = nextUntitledPresetName()
     targetType = .mouse
     mouseButton = .left
     keyboardInputMode = .command
@@ -392,7 +404,46 @@ final class AutomationViewModel {
     stopAtScreenEdge = true
     gamingMacroEnabled = false
     jitterSamples = []
-    statusMessage = "New preset ready"
+    savePreset()
+    presetBeingRenamedID = selectedPresetID
+  }
+
+  func beginRenamingSelectedPreset() {
+    guard let selectedPresetID else { return }
+    beginRenamingPreset(selectedPresetID)
+  }
+
+  func beginRenamingPreset(_ id: UUID) {
+    guard presets.contains(where: { $0.id == id }) else { return }
+    if selectedPresetID != id {
+      selectPreset(id)
+    }
+    presetBeingRenamedID = id
+  }
+
+  func cancelRenamingPreset() {
+    presetBeingRenamedID = nil
+  }
+
+  @discardableResult
+  func renamePreset(_ id: UUID, to name: String) -> Bool {
+    let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedName.isEmpty,
+          let index = presets.firstIndex(where: { $0.id == id })
+    else {
+      statusMessage = "Preset name cannot be empty"
+      return false
+    }
+
+    let normalizedName = String(trimmedName.prefix(60))
+    presets[index].name = normalizedName
+    if selectedPresetID == id {
+      presetName = normalizedName
+    }
+    presetBeingRenamedID = nil
+    persistPresets()
+    statusMessage = "Renamed \(normalizedName)"
+    return true
   }
 
   func savePreset() {
@@ -417,23 +468,54 @@ final class AutomationViewModel {
   }
 
   func deleteSelectedPreset() {
-    guard let selectedID = selectedPresetID,
-          presets.count > 1,
-          let index = presets.firstIndex(where: { $0.id == selectedID })
+    guard let selectedPresetID else { return }
+    deletePreset(selectedPresetID)
+  }
+
+  func deletePreset(_ id: UUID) {
+    guard presets.count > 1,
+          let index = presets.firstIndex(where: { $0.id == id })
     else {
+      statusMessage = "Keep at least one preset"
       return
     }
 
-    if isClicking { stopClicking() }
+    let removedName = presets[index].name
+    let removedSelectedPreset = selectedPresetID == id
+    if isClicking && removedSelectedPreset { stopClicking() }
     presets.remove(at: index)
     persistPresets()
 
-    let replacement = presets[min(index, presets.count - 1)]
-    selectedPresetID = replacement.id
-    draftID = replacement.id
-    apply(replacement)
-    defaults.set(replacement.id.uuidString, forKey: selectedPresetKey)
-    statusMessage = "Removed preset"
+    if presetBeingRenamedID == id {
+      presetBeingRenamedID = nil
+    }
+
+    if removedSelectedPreset {
+      let replacement = presets[min(index, presets.count - 1)]
+      selectedPresetID = replacement.id
+      draftID = replacement.id
+      apply(replacement)
+      defaults.set(replacement.id.uuidString, forKey: selectedPresetKey)
+    }
+    statusMessage = "Removed \(removedName)"
+  }
+
+  func setCustomAppIconData(_ data: Data?) {
+    if let data {
+      guard let image = NSImage(data: data) else {
+        statusMessage = "Choose a valid image file"
+        return
+      }
+      customAppIconData = data
+      defaults.set(data, forKey: customAppIconKey)
+      NSApplication.shared.applicationIconImage = image
+      statusMessage = "Custom app icon updated"
+    } else {
+      customAppIconData = nil
+      defaults.removeObject(forKey: customAppIconKey)
+      applyCustomAppIcon()
+      statusMessage = "Restored the default app icon"
+    }
   }
 
   func refreshAvailableWindows() {
@@ -583,6 +665,24 @@ final class AutomationViewModel {
   private func persistPresets() {
     guard let data = try? JSONEncoder().encode(presets) else { return }
     defaults.set(data, forKey: presetsKey)
+  }
+
+  private func nextUntitledPresetName() -> String {
+    var suffix = 1
+    var candidate = "Untitled Preset"
+    while presets.contains(where: { $0.name.localizedCaseInsensitiveCompare(candidate) == .orderedSame }) {
+      suffix += 1
+      candidate = "Untitled Preset \(suffix)"
+    }
+    return candidate
+  }
+
+  private func applyCustomAppIcon() {
+    if let customAppIconImage {
+      NSApplication.shared.applicationIconImage = customAppIconImage
+    } else {
+      NSApplication.shared.applicationIconImage = NSWorkspace.shared.icon(forFile: Bundle.main.bundleURL.path)
+    }
   }
 
   private func apply(_ preset: ClickerPreset) {

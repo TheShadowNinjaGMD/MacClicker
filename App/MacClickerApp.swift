@@ -35,6 +35,21 @@ struct MacClickerApp: App {
     .defaultSize(width: 1_180, height: 780)
     .windowStyle(.hiddenTitleBar)
     .windowToolbarStyle(.unifiedCompact)
+    .commands {
+      CommandMenu("Presets") {
+        Button("Rename Preset", systemImage: "pencil") {
+          model.beginRenamingSelectedPreset()
+        }
+        .keyboardShortcut(.return, modifiers: [])
+        .disabled(model.selectedPresetID == nil || model.presetBeingRenamedID != nil)
+
+        Button("Delete Preset", systemImage: "trash", role: .destructive) {
+          model.deleteSelectedPreset()
+        }
+        .keyboardShortcut(.delete, modifiers: [])
+        .disabled(model.presets.count <= 1 || model.presetBeingRenamedID != nil)
+      }
+    }
 
     MenuBarExtra {
       MenuBarStatusMenu(model: model)
