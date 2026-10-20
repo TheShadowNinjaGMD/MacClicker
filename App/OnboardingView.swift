@@ -359,9 +359,9 @@ enum TutorialCard: String, CaseIterable, Hashable, Identifiable {
     case .target:
       return "Choose a mouse button or bind a standard character, Spacebar, Enter, Escape, or a function command."
     case .windows:
-      return "Lock a preset to a running app so automation stops when focus moves somewhere else."
+      return "Lock a preset to a running app. Automation stays armed and resumes only while that app is frontmost."
     case .panic:
-      return "Control + Option + Space toggles the engine. Moving the pointer to the screen edge is an immediate safety stop."
+      return "Control + S toggles automation. Control + X stops immediately. Moving the pointer to the screen edge is an immediate safety stop."
     }
   }
 

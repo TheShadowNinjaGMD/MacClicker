@@ -67,7 +67,7 @@ struct WorkspaceSidebar: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      SidebarBrand(customAppIconImage: model.customAppIconImage)
+      SidebarBrand(appIconImage: model.appIconImage)
 
       HStack {
         Text("PRESETS")
@@ -124,24 +124,16 @@ struct WorkspaceSidebar: View {
 }
 
 struct SidebarBrand: View {
-  let customAppIconImage: NSImage?
+  let appIconImage: NSImage
 
   var body: some View {
     HStack(spacing: 11) {
-      Group {
-        if let customAppIconImage {
-          Image(nsImage: customAppIconImage)
-            .resizable()
-            .scaledToFit()
-            .padding(3)
-        } else {
-          Image(systemName: "cursorarrow.click.2")
-            .font(.title3.weight(.semibold))
-            .foregroundStyle(Color.mint, Color.teal)
-            .symbolRenderingMode(.palette)
-        }
-      }
+      Image(nsImage: appIconImage)
+        .resizable()
+        .scaledToFit()
+        .padding(3)
       .frame(width: 30, height: 30)
+      .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
       .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 9))
 
       VStack(alignment: .leading, spacing: 2) {
@@ -759,7 +751,7 @@ struct WindowLockSection: View {
     GlassPanel {
       PanelHeader(
         title: "Window lock",
-        subtitle: "The engine stops when focus leaves the selected app.",
+        subtitle: "The engine stays armed and posts only while the selected app is frontmost.",
         systemImage: "macwindow.on.rectangle",
         colors: [.purple, .pink]
       )
@@ -897,7 +889,7 @@ struct OptionBanner: View {
 struct SettingsView: View {
   @Bindable var model: AutomationViewModel
   @Environment(\.dismiss) private var dismiss
-  @State private var isImportingCustomIcon = false
+  @State private var isIconDropTargeted = false
   @State private var isShowingIconImportError = false
   @State private var iconImportError = "Choose a supported image or icon file."
 
@@ -922,7 +914,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 3) {
           Text("Settings")
             .font(.title2.weight(.bold))
-          Text("Tune how MacClicker responds to your keyboard.")
+          Text("Set an app icon and customize keyboard shortcuts.")
             .font(.caption)
             .foregroundStyle(.secondary)
         }
@@ -934,29 +926,23 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 18) {
           GlassPanel {
             HStack(spacing: 14) {
-              Group {
-                if let customAppIconImage = model.customAppIconImage {
-                  Image(nsImage: customAppIconImage)
-                    .resizable()
-                    .scaledToFit()
-                    .padding(4)
-                } else {
-                  Image(systemName: "cursorarrow.click.2")
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(Color.mint, Color.teal)
-                    .symbolRenderingMode(.palette)
-                }
-              }
-              .frame(width: 48, height: 48)
-              .background(
-                Color.accentColor.opacity(0.12),
-                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-              )
+              Image(nsImage: model.appIconImage)
+                .resizable()
+                .scaledToFit()
+                .padding(4)
+                .accessibilityLabel("App icon preview")
+                .frame(width: 48, height: 48)
+                .background(
+                  Color.accentColor.opacity(0.12),
+                  in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
 
               VStack(alignment: .leading, spacing: 3) {
-                Text("Add a custom icon for this app")
+                Text(model.customAppIconData == nil ? "App icon" : "Custom app icon")
                   .font(.subheadline.weight(.semibold))
-                Text("Choose an image or ICNS icon for the Dock and MacClicker interface. System Settings may still show the installed app’s icon.")
+                Text(isIconDropTargeted
+                  ? "Release to use this image."
+                  : "Drop an image here or choose a file. This updates the Dock and app interface; System Settings may keep the installed icon.")
                   .font(.caption)
                   .foregroundStyle(.secondary)
                   .fixedSize(horizontal: false, vertical: true)
@@ -968,13 +954,17 @@ struct SettingsView: View {
                 model.customAppIconData == nil ? "Choose Icon…" : "Change Icon…",
                 systemImage: "photo"
               ) {
-                isImportingCustomIcon = true
+                presentIconOpenPanel()
               }
               .buttonStyle(.bordered)
 
               if model.customAppIconData != nil {
                 Button("Restore default icon", systemImage: "arrow.counterclockwise") {
-                  model.setCustomAppIconData(nil)
+                  do {
+                    try model.setCustomAppIconData(nil)
+                  } catch {
+                    showIconImportError(error)
+                  }
                 }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
@@ -982,6 +972,19 @@ struct SettingsView: View {
               }
             }
           }
+          .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+              .strokeBorder(
+                isIconDropTargeted ? Color.accentColor : Color.clear,
+                lineWidth: isIconDropTargeted ? 2 : 0
+              )
+          }
+          .onDrop(
+            of: [UTType.fileURL],
+            isTargeted: $isIconDropTargeted,
+            perform: handleIconDrop
+          )
+          .animation(.spring(response: 0.35, dampingFraction: 0.75), value: isIconDropTargeted)
 
           GlassPanel {
             VStack(alignment: .leading, spacing: 0) {
@@ -1034,7 +1037,7 @@ struct SettingsView: View {
               VStack(alignment: .leading, spacing: 3) {
                 Text("Reset shortcuts")
                   .font(.subheadline.weight(.semibold))
-                Text("Restore Control + Option + Space and Control + Option + Escape.")
+                Text("Restore Control + S for Start / Stop and Control + X for Emergency Stop.")
                   .font(.caption)
                   .foregroundStyle(.secondary)
               }
@@ -1072,22 +1075,7 @@ struct SettingsView: View {
         isEmphasized: true
       )
     }
-    .fileImporter(
-      isPresented: $isImportingCustomIcon,
-      allowedContentTypes: customIconContentTypes,
-      allowsMultipleSelection: false
-    ) { result in
-      switch result {
-      case .success(let urls):
-        guard let url = urls.first else { return }
-        importCustomIcon(from: url)
-      case .failure(let error):
-        guard (error as NSError).code != NSUserCancelledError else { return }
-        iconImportError = error.localizedDescription
-        isShowingIconImportError = true
-      }
-    }
-    .alert("Couldn’t add custom icon", isPresented: $isShowingIconImportError) {
+    .alert("Couldn’t update app icon", isPresented: $isShowingIconImportError) {
       Button("OK", role: .cancel) {}
     } message: {
       Text(iconImportError)
@@ -1099,6 +1087,45 @@ struct SettingsView: View {
     }
   }
 
+  private func presentIconOpenPanel() {
+    let panel = NSOpenPanel()
+    panel.title = "Choose an App Icon"
+    panel.prompt = "Choose"
+    panel.allowedContentTypes = customIconContentTypes
+    panel.allowsMultipleSelection = false
+    panel.canChooseDirectories = false
+    panel.canChooseFiles = true
+    panel.begin { response in
+      guard response == .OK, let url = panel.url else { return }
+      importCustomIcon(from: url)
+    }
+  }
+
+  private func handleIconDrop(_ providers: [NSItemProvider]) -> Bool {
+    guard let provider = providers.first(where: {
+      $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+    }) else {
+      return false
+    }
+
+    provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
+      let droppedURL = (item as? URL)
+        ?? (item as? Data).flatMap { URL(dataRepresentation: $0, relativeTo: nil) }
+        ?? (item as? String).flatMap { URL(string: $0) }
+      let failureMessage = error?.localizedDescription
+
+      Task { @MainActor in
+        guard let droppedURL else {
+          iconImportError = failureMessage ?? "Drop an image file to set it as the app icon."
+          isShowingIconImportError = true
+          return
+        }
+        importCustomIcon(from: droppedURL)
+      }
+    }
+    return true
+  }
+
   private func importCustomIcon(from url: URL) {
     let didStartAccessing = url.startAccessingSecurityScopedResource()
     defer {
@@ -1108,27 +1135,28 @@ struct SettingsView: View {
     }
 
     do {
-      let sourceData = try Data(contentsOf: url)
-      guard let image = NSImage(data: sourceData),
-            let tiffData = image.tiffRepresentation,
-            let bitmap = NSBitmapImageRep(data: tiffData),
-            let pngData = bitmap.representation(using: .png, properties: [:])
-      else {
-        throw CustomAppIconImportError.invalidImage
+      if let fileSize = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+         fileSize > 32 * 1_024 * 1_024 {
+        throw CustomAppIconImportError.imageTooLarge
       }
-      model.setCustomAppIconData(pngData)
+      let sourceData = try Data(contentsOf: url)
+      try model.setCustomAppIconData(sourceData)
     } catch {
-      iconImportError = error.localizedDescription
-      isShowingIconImportError = true
+      showIconImportError(error)
     }
+  }
+
+  private func showIconImportError(_ error: Error) {
+    iconImportError = error.localizedDescription
+    isShowingIconImportError = true
   }
 }
 
 private enum CustomAppIconImportError: LocalizedError {
-  case invalidImage
+  case imageTooLarge
 
   var errorDescription: String? {
-    "The selected file couldn’t be read as an image or icon. Choose a PNG, JPEG, ICNS, or other supported image file."
+    "Choose an image file smaller than 32 MB."
   }
 }
 

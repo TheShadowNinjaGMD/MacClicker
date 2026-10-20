@@ -54,10 +54,14 @@ struct MacClickerApp: App {
     MenuBarExtra {
       MenuBarStatusMenu(model: model)
     } label: {
-      Label(
-        model.isClicking ? "MacClicker is running" : "MacClicker",
-        systemImage: model.isClicking ? "cursorarrow.click.2" : "cursorarrow"
-      )
+      Label {
+        Text(model.isClicking ? "MacClicker is running" : "MacClicker")
+      } icon: {
+        Image(nsImage: model.appIconImage)
+          .resizable()
+          .scaledToFit()
+          .frame(width: 16, height: 16)
+      }
     }
     .menuBarExtraStyle(.menu)
   }

@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import CoreGraphics
 import Foundation
 import Observation
 
@@ -27,13 +28,25 @@ struct HotKeyBinding: Codable, Equatable, Sendable {
   }
 
   static let defaultStartStop = HotKeyBinding(
+    keyCode: 1,
+    keyLabel: "S",
+    modifierRawValue: NSEvent.ModifierFlags.control.rawValue
+  )
+
+  static let defaultEmergencyStop = HotKeyBinding(
+    keyCode: 7,
+    keyLabel: "X",
+    modifierRawValue: NSEvent.ModifierFlags.control.rawValue
+  )
+
+  static let legacyDefaultStartStop = HotKeyBinding(
     keyCode: 49,
     keyLabel: "Space",
     modifierRawValue: NSEvent.ModifierFlags.control.rawValue
       | NSEvent.ModifierFlags.option.rawValue
   )
 
-  static let defaultEmergencyStop = HotKeyBinding(
+  static let legacyDefaultEmergencyStop = HotKeyBinding(
     keyCode: 53,
     keyLabel: "Escape",
     modifierRawValue: NSEvent.ModifierFlags.control.rawValue
@@ -159,6 +172,8 @@ final class AutomationViewModel {
   var lastSavedAt: Date?
   var statusMessage = "Ready when you are"
 
+  @ObservationIgnored private var cachedCustomAppIconImage: NSImage?
+
   var accessibilityGranted: Bool {
     AXIsProcessTrusted()
   }
@@ -181,8 +196,12 @@ final class AutomationViewModel {
   var selectedTargetWindow: TargetWindow?
 
   var customAppIconImage: NSImage? {
-    guard let customAppIconData else { return nil }
-    return NSImage(data: customAppIconData)
+    guard customAppIconData != nil else { return nil }
+    return cachedCustomAppIconImage
+  }
+
+  var appIconImage: NSImage {
+    customAppIconImage ?? Self.bundledAppIconImage
   }
 
   @ObservationIgnored private let engine: ClickerEngine
@@ -197,11 +216,16 @@ final class AutomationViewModel {
   private let presetsKey = "com.app.macClicker.presets"
   private let selectedPresetKey = "com.app.macClicker.selectedPreset"
   private let hotKeysKey = "com.app.macClicker.hotKeys"
-  private let customAppIconKey = "com.app.macClicker.customAppIcon"
+  private static let customAppIconKey = "com.app.macClicker.customAppIcon"
+  private static let maximumCustomIconFileSize = 32 * 1_024 * 1_024
+  private static let bundledAppIconImage = NSWorkspace.shared.icon(
+    forFile: Bundle.main.bundleURL.path
+  )
 
   init() {
     engine = ClickerEngine()
-    customAppIconData = defaults.data(forKey: customAppIconKey)
+    customAppIconData = Self.loadCustomAppIconData(defaults: defaults)
+    cachedCustomAppIconImage = customAppIconData.flatMap(NSImage.init(data:))
     applyCustomAppIcon()
     loadHotKeys()
     loadPresets()
@@ -500,22 +524,24 @@ final class AutomationViewModel {
     statusMessage = "Removed \(removedName)"
   }
 
-  func setCustomAppIconData(_ data: Data?) {
-    if let data {
-      guard let image = NSImage(data: data) else {
-        statusMessage = "Choose a valid image file"
-        return
-      }
-      customAppIconData = data
-      defaults.set(data, forKey: customAppIconKey)
-      NSApplication.shared.applicationIconImage = image
-      statusMessage = "Custom app icon updated"
-    } else {
+  func setCustomAppIconData(_ data: Data?) throws {
+    guard let data else {
+      try Self.removeStoredCustomAppIcon()
+      cachedCustomAppIconImage = nil
       customAppIconData = nil
-      defaults.removeObject(forKey: customAppIconKey)
+      defaults.removeObject(forKey: Self.customAppIconKey)
       applyCustomAppIcon()
       statusMessage = "Restored the default app icon"
+      return
     }
+
+    let normalizedData = try Self.normalizedPNGData(from: data)
+    try Self.storeCustomAppIcon(normalizedData)
+    defaults.removeObject(forKey: Self.customAppIconKey)
+    cachedCustomAppIconImage = NSImage(data: normalizedData)
+    customAppIconData = normalizedData
+    applyCustomAppIcon()
+    statusMessage = "Custom app icon updated"
   }
 
   func refreshAvailableWindows() {
@@ -599,13 +625,26 @@ final class AutomationViewModel {
 
   private func loadHotKeys() {
     guard let data = defaults.data(forKey: hotKeysKey),
-          let preferences = try? JSONDecoder().decode(HotKeyPreferences.self, from: data)
+          var preferences = try? JSONDecoder().decode(HotKeyPreferences.self, from: data)
     else {
       return
     }
 
+    var didMigrate = false
+    if preferences.startStop == .legacyDefaultStartStop {
+      preferences.startStop = .defaultStartStop
+      didMigrate = true
+    }
+    if preferences.emergencyStop == .legacyDefaultEmergencyStop {
+      preferences.emergencyStop = .defaultEmergencyStop
+      didMigrate = true
+    }
+
     startStopHotKey = preferences.startStop
     emergencyStopHotKey = preferences.emergencyStop
+    if didMigrate {
+      persistHotKeys()
+    }
   }
 
   private func persistHotKeys() {
@@ -678,11 +717,120 @@ final class AutomationViewModel {
   }
 
   private func applyCustomAppIcon() {
-    if let customAppIconImage {
-      NSApplication.shared.applicationIconImage = customAppIconImage
-    } else {
-      NSApplication.shared.applicationIconImage = NSWorkspace.shared.icon(forFile: Bundle.main.bundleURL.path)
+    NSApplication.shared.applicationIconImage = appIconImage
+  }
+
+  private static var customAppIconURL: URL {
+    let applicationSupport = FileManager.default.urls(
+      for: .applicationSupportDirectory,
+      in: .userDomainMask
+    )[0]
+    let appDirectory = applicationSupport.appendingPathComponent(
+      Bundle.main.bundleIdentifier ?? "MacClicker",
+      isDirectory: true
+    )
+    return appDirectory.appendingPathComponent("custom-app-icon.png")
+  }
+
+  private static func loadCustomAppIconData(defaults: UserDefaults) -> Data? {
+    let fileURL = customAppIconURL
+    if let storedData = try? Data(contentsOf: fileURL) {
+      if let normalizedData = try? normalizedPNGData(from: storedData) {
+        defaults.removeObject(forKey: customAppIconKey)
+        return normalizedData
+      }
+      try? FileManager.default.removeItem(at: fileURL)
     }
+
+    guard let legacyData = defaults.data(forKey: customAppIconKey) else { return nil }
+    guard let normalizedData = try? normalizedPNGData(from: legacyData) else {
+      defaults.removeObject(forKey: customAppIconKey)
+      return nil
+    }
+
+    do {
+      try storeCustomAppIcon(normalizedData)
+      defaults.removeObject(forKey: customAppIconKey)
+    } catch {
+      // Keep the migrated image available for this session if storage is unavailable.
+    }
+    return normalizedData
+  }
+
+  private static func normalizedPNGData(from data: Data) throws -> Data {
+    guard data.count <= maximumCustomIconFileSize else {
+      throw CustomAppIconStorageError.imageTooLarge
+    }
+    guard let image = NSImage(data: data) else {
+      throw CustomAppIconStorageError.invalidImage
+    }
+
+    var proposedRect = CGRect(origin: .zero, size: image.size)
+    guard let sourceImage = image.cgImage(
+      forProposedRect: &proposedRect,
+      context: nil,
+      hints: nil
+    ) else {
+      throw CustomAppIconStorageError.invalidImage
+    }
+
+    let side = 1_024
+    let scale = min(
+      1,
+      min(
+        CGFloat(side) / CGFloat(sourceImage.width),
+        CGFloat(side) / CGFloat(sourceImage.height)
+      )
+    )
+    let width = max(1, Int((CGFloat(sourceImage.width) * scale).rounded()))
+    let height = max(1, Int((CGFloat(sourceImage.height) * scale).rounded()))
+    guard let context = CGContext(
+      data: nil,
+      width: side,
+      height: side,
+      bitsPerComponent: 8,
+      bytesPerRow: 0,
+      space: CGColorSpaceCreateDeviceRGB(),
+      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else {
+      throw CustomAppIconStorageError.invalidImage
+    }
+
+    context.interpolationQuality = .high
+    context.clear(CGRect(x: 0, y: 0, width: side, height: side))
+    context.draw(
+      sourceImage,
+      in: CGRect(
+        x: CGFloat(side - width) / 2,
+        y: CGFloat(side - height) / 2,
+        width: CGFloat(width),
+        height: CGFloat(height)
+      )
+    )
+    guard let iconImage = context.makeImage(),
+          let pngData = NSBitmapImageRep(cgImage: iconImage).representation(
+            using: .png,
+            properties: [:]
+          ) else {
+      throw CustomAppIconStorageError.invalidImage
+    }
+    return pngData
+  }
+
+  private static func storeCustomAppIcon(_ data: Data) throws {
+    let fileURL = customAppIconURL
+    try FileManager.default.createDirectory(
+      at: fileURL.deletingLastPathComponent(),
+      withIntermediateDirectories: true,
+      attributes: nil
+    )
+    try data.write(to: fileURL, options: .atomic)
+  }
+
+  private static func removeStoredCustomAppIcon() throws {
+    let fileURL = customAppIconURL
+    guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+    try FileManager.default.removeItem(at: fileURL)
   }
 
   private func apply(_ preset: ClickerPreset) {
@@ -743,4 +891,18 @@ final class AutomationViewModel {
     }
   }
 
+}
+
+private enum CustomAppIconStorageError: LocalizedError {
+  case invalidImage
+  case imageTooLarge
+
+  var errorDescription: String? {
+    switch self {
+    case .invalidImage:
+      return "Choose a valid image file, such as PNG, JPEG, TIFF, or ICNS."
+    case .imageTooLarge:
+      return "Choose an image file smaller than 32 MB."
+    }
+  }
 }

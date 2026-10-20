@@ -78,8 +78,14 @@ final class ClickerEngine: @unchecked Sendable {
   private func fireLocked() {
     guard isRunning, let preset else { return }
 
-    if reachedLimit(for: preset) || !isTargetApplicationFrontmost(for: preset) {
+    if reachedLimit(for: preset) {
       stopLocked(notify: true)
+      return
+    }
+
+    guard isTargetApplicationFrontmost(for: preset) else {
+      releasePendingInputLocked()
+      scheduleNextLocked(for: preset, minimumInterval: 0.1)
       return
     }
 
@@ -100,7 +106,10 @@ final class ClickerEngine: @unchecked Sendable {
     }
   }
 
-  private func scheduleNextLocked(for preset: ClickerPreset) {
+  private func scheduleNextLocked(
+    for preset: ClickerPreset,
+    minimumInterval: TimeInterval = 0
+  ) {
     guard let timer, isRunning else { return }
 
     let cappedCPS = min(max(preset.cps, 1), 500)
@@ -113,7 +122,10 @@ final class ClickerEngine: @unchecked Sendable {
       ClickerPreset.maximumPressDuration
     )
     let pressMultiplier = pendingSecondaryTarget == nil ? 1.0 : 2.0
-    let nextInterval = max(interval, pressDuration * pressMultiplier + 0.001)
+    let nextInterval = max(
+      minimumInterval,
+      max(interval, pressDuration * pressMultiplier + 0.001)
+    )
     let nanoseconds = max(1, Int(nextInterval * 1_000_000_000))
 
     timer.schedule(
@@ -390,7 +402,7 @@ final class ClickerEngine: @unchecked Sendable {
     let topWindow = windowInfo.first,
     let ownerName = topWindow[kCGWindowOwnerName as String] as? String
     else {
-      return true
+      return false
     }
 
     return ownerName == targetWindow.appName
