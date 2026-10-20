@@ -38,7 +38,7 @@
         "ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME": "AccentColor",
         "CURRENT_PROJECT_VERSION": "1",
         "MARKETING_VERSION": "1.0",
-        "PRODUCT_BUNDLE_IDENTIFIER": "app.bitrig.new.112ca00c-909b-4e01-8ce6-94101b0ef1ec",
+        "PRODUCT_BUNDLE_IDENTIFIER": "com.theshadowninja.app",
         "PRODUCT_NAME": "$(TARGET_NAME)",
         "SWIFT_VERSION": "6.0"
       },
