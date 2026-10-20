@@ -899,7 +899,15 @@ struct SettingsView: View {
   @Environment(\.dismiss) private var dismiss
   @State private var isImportingCustomIcon = false
   @State private var isShowingIconImportError = false
-  @State private var iconImportError = "Choose a valid image file."
+  @State private var iconImportError = "Choose a supported image or icon file."
+
+  private var customIconContentTypes: [UTType] {
+    var contentTypes = [UTType.image]
+    if let icnsType = UTType(filenameExtension: "icns") {
+      contentTypes.append(icnsType)
+    }
+    return contentTypes
+  }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -948,7 +956,7 @@ struct SettingsView: View {
               VStack(alignment: .leading, spacing: 3) {
                 Text("Add a custom icon for this app")
                   .font(.subheadline.weight(.semibold))
-                Text("Use an image for the Dock and MacClicker interface. System Settings may still show the installed app’s icon.")
+                Text("Choose an image or ICNS icon for the Dock and MacClicker interface. System Settings may still show the installed app’s icon.")
                   .font(.caption)
                   .foregroundStyle(.secondary)
                   .fixedSize(horizontal: false, vertical: true)
@@ -1066,7 +1074,7 @@ struct SettingsView: View {
     }
     .fileImporter(
       isPresented: $isImportingCustomIcon,
-      allowedContentTypes: [.image],
+      allowedContentTypes: customIconContentTypes,
       allowsMultipleSelection: false
     ) { result in
       switch result {
@@ -1120,7 +1128,7 @@ private enum CustomAppIconImportError: LocalizedError {
   case invalidImage
 
   var errorDescription: String? {
-    "The selected file couldn’t be read as an image. Choose a PNG, JPEG, or other supported image file."
+    "The selected file couldn’t be read as an image or icon. Choose a PNG, JPEG, ICNS, or other supported image file."
   }
 }
 
