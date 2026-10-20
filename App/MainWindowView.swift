@@ -1050,6 +1050,34 @@ struct SettingsView: View {
               .buttonStyle(.bordered)
             }
           }
+
+          GlassPanel {
+            HStack(spacing: 12) {
+              Image(systemName: "arrow.counterclockwise")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(Color.teal, Color.mint)
+                .symbolRenderingMode(.palette)
+                .frame(width: 32, height: 32)
+                .background(Color.teal.opacity(0.13), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+
+              VStack(alignment: .leading, spacing: 3) {
+                Text("Onboarding")
+                  .font(.subheadline.weight(.semibold))
+                Text("Replay the welcome, permissions, and tutorial. Running automation will stop.")
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+                  .fixedSize(horizontal: false, vertical: true)
+              }
+
+              Spacer(minLength: 10)
+
+              Button("Replay onboarding", systemImage: "arrow.counterclockwise") {
+                model.replayOnboarding()
+                dismiss()
+              }
+              .buttonStyle(.bordered)
+            }
+          }
         }
         .padding(.vertical, 24)
       }

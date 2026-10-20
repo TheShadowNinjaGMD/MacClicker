@@ -580,6 +580,14 @@ final class AutomationViewModel {
     defaults.set(true, forKey: "hasCompletedOnboarding")
   }
 
+  func replayOnboarding() {
+    if isClicking {
+      stopClicking()
+    }
+    defaults.set(false, forKey: "hasCompletedOnboarding")
+    statusMessage = "Onboarding ready to replay"
+  }
+
   private var normalizedPresetName: String {
     let trimmed = presetName.trimmingCharacters(in: .whitespacesAndNewlines)
     return trimmed.isEmpty ? "Untitled Preset" : String(trimmed.prefix(60))
